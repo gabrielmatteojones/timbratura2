@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>Timbra</title>
+<meta name="theme-color" content="#101c4d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Timbra">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root{--navy:#101c4d;--cream:#fdf5ee;--red:#d3121b;--muted:#5d668a}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--cream);color:var(--navy);font:17px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;-webkit-text-size-adjust:100%}
+body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 18px calc(18px + env(safe-area-inset-bottom))}
+#pill{align-self:flex-end;margin-top:12px;font:700 13px/1 inherit;font-family:inherit;padding:8px 12px;border-radius:99px;background:rgba(16,28,77,.08);display:inline-flex;align-items:center;gap:7px;border:0;color:var(--navy)}
+#pill::before{content:"";width:9px;height:9px;border-radius:50%;background:#8a93b8}
+#pill[data-c=ok]::before{background:#1c9a5a}
+#pill[data-c=wait]::before,#pill[data-c=off]::before{background:#e29a00}
+#pill[data-c=err]::before{background:var(--red)}
+#pill[data-c=sync]::before{background:#3b82f6}
+main{flex:1;display:flex;flex-direction:column;justify-content:center;gap:12px;max-width:520px;width:100%;margin:0 auto}
+h1{margin:0 0 2px;font:800 34px/1.05 "Arial Narrow",Arial,sans-serif;text-transform:uppercase;text-align:center;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.where{display:flex;justify-content:center;align-items:center;gap:10px;font-weight:700;font-size:22px}
+.live{width:12px;height:12px;border-radius:50%;background:var(--red);animation:pulse 1.8s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(211,18,27,.5)}70%,100%{box-shadow:0 0 0 12px rgba(211,18,27,0)}}
+.timer{font:800 56px/1.1 ui-monospace,"SF Mono",Menlo,monospace;text-align:center;font-variant-numeric:tabular-nums;margin:6px 0 14px}
+button.b{font:inherit;border:0;border-radius:16px;min-height:74px;padding:12px 16px;font-weight:800;font-size:22px;color:#fff;background:var(--navy);width:100%;cursor:pointer}
+button.b:active{transform:scale(.98);filter:brightness(1.15)}
+button.b.red{background:var(--red)}
+button.b.big{min-height:96px;font-size:28px}
+button.b small{display:block;font-weight:500;font-size:13px;opacity:.85}
+label{font-size:13px;font-weight:700;color:var(--muted)}
+input{width:100%;font:inherit;padding:14px;border:1px solid rgba(16,28,77,.2);border-radius:12px;margin:4px 0 10px;background:#fff;color:var(--navy)}
+.hint{font-size:14px;color:var(--muted);margin:0 0 6px}
+#toast{position:fixed;left:14px;right:14px;bottom:calc(16px + env(safe-area-inset-bottom));max-width:492px;margin:0 auto;background:#0a1238;color:#fff;border-radius:14px;padding:14px 16px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.3)}
+#toast.on{display:flex}
+#toast span{flex:1}
+#toast button{border:0;border-radius:10px;background:rgba(255,255,255,.18);color:#fff;font:inherit;font-weight:700;padding:8px 14px}
+</style>
+</head>
+<body>
+<button id="pill" type="button" data-c="sync">…</button>
+<main id="main"></main>
+<div id="toast" role="status"><span></span><button type="button">Annulla</button></div>
+
+<script>
+(() => {
+"use strict";
+/* ============================================================================================
+   TIMBRA · un solo file. Fa una cosa: entrata e uscita.
+   Le timbrature si salvano sul telefono e vengono mandate a Jones House appena c'è rete.
+
+   SETUP (una volta sola, dentro l'app): indirizzo del portale e TOKEN.
+   Il token è la variabile PRESENZE_TOKEN impostata su Netlify (Site settings → Environment variables).
+   Per non digitarli puoi anche scriverli qui sotto.
+   ============================================================================================ */
+const SERVER_URL = "https://joneshouse.it";   // vuoto = stesso indirizzo da cui è aperta la pagina
+const TOKEN      = "Adriatico";   // deve essere uguale a PRESENZE_TOKEN su Netlify
+
+const LS_CFG = "tj:cfg", LS_CODA = "tj:coda", LS_REG = "tj:registro", LS_LUOGHI = "tj:luoghi";
+const BASE = ["Scuola", "Oratorio", "Attività extrascolastica"];
+const $ = s => document.querySelector(s);
+const leggi = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const scrivi = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
+const pad = n => String(n).padStart(2, "0");
+const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const hhmm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const clock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`; };
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 12));
+
+let cfg = leggi(LS_CFG, {});
+let coda = leggi(LS_CODA, {}), registro = leggi(LS_REG, {}), luoghi = leggi(LS_LUOGHI, BASE);
+let stato = "?";            // ? | ok | offline | auth | server
+let invio = false, firma = "", tick = 0, tt = 0, setup = false;
+
+const base = () => (SERVER_URL || cfg.url || (location.protocol.startsWith("http") ? location.origin : "")).replace(/\/+$/, "");
+const token = () => TOKEN || cfg.token || "";
+const configurato = () => !!base() && !!token();
+
+/* ---------- Dati (solo di questo telefono) ---------- */
+const tutte = () => {
+  const m = new Map();
+  const metti = r => { const o = m.get(r.id); if (!o || r.modificato >= o.modificato) m.set(r.id, r); };
+  Object.values(registro).forEach(metti);
+  Object.values(coda).forEach(metti);
+  return [...m.values()].filter(r => !r.eliminato).sort((a, b) => b.entrata.localeCompare(a.entrata));
+};
+const aperto = () => tutte().find(r => !r.uscita) || null;
+
+/* ---------- Invio a Jones House ---------- */
+async function sync() {
+  if (invio || !configurato()) { draw(); return; }
+  if (!navigator.onLine) { stato = "offline"; draw(); return; }
+  invio = true; draw();
+  const c = new AbortController(), t = setTimeout(() => c.abort(), 10000);
+  try {
+    const spediti = Object.values(coda);
+    const r = await fetch(base() + "/api/presenze-ingest", {
+      method: "POST", signal: c.signal, cache: "no-store",
+      headers: { "content-type": "application/json", "authorization": "Bearer " + token() },
+      body: JSON.stringify({ registrazioni: spediti })
+    });
+    if (r.status === 401) { stato = "auth"; throw 0; }
+    if (!r.ok) { stato = "server"; throw 0; }
+    const d = await r.json();
+    const ok = new Set(d.accettate || []), rif = new Set((d.rifiutate || []).map(x => x.id));
+    spediti.forEach(s => {
+      if (!(ok.has(s.id) || rif.has(s.id)) || !coda[s.id] || coda[s.id].modificato !== s.modificato) return;
+      if (ok.has(s.id)) registro[s.id] = s;
+      delete coda[s.id];
+    });
+    // tiene in memoria solo gli ultimi 60 giorni
+    const limite = new Date(Date.now() - 60 * 864e5).toISOString();
+    Object.keys(registro).forEach(i => { if (registro[i].entrata < limite && registro[i].uscita) delete registro[i]; });
+    scrivi(LS_CODA, coda); scrivi(LS_REG, registro);
+    if (Array.isArray(d.luoghi) && d.luoghi.length) { luoghi = d.luoghi; scrivi(LS_LUOGHI, luoghi); }
+    if (rif.size) toast("Il portale ha rifiutato una timbratura");
+    stato = "ok";
+  } catch { if (stato === "?" || stato === "ok") stato = "offline"; }
+  clearTimeout(t); invio = false; draw();
+}
+
+/* ---------- Azioni ---------- */
+function salva(rec) {
+  coda[rec.id] = rec;
+  if (!scrivi(LS_CODA, coda)) alert("Non riesco a salvare sul telefono (memoria piena o navigazione privata): questa timbratura potrebbe andare persa.");
+  draw(); sync();
+}
+function toast(msg, undo) {
+  const el = $("#toast"), b = el.querySelector("button");
+  el.querySelector("span").textContent = msg;
+  b.style.display = undo ? "" : "none";
+  b.onclick = () => { clearTimeout(tt); el.classList.remove("on"); if (undo) undo(); };
+  el.classList.add("on");
+  clearTimeout(tt); tt = setTimeout(() => el.classList.remove("on"), undo ? 8000 : 4000);
+}
+function entra(luogo) {
+  if (aperto()) return;
+  const t = new Date(), rec = { id: uid(), luogo, data: isoDate(t), entrata: t.toISOString(), uscita: null, note: "", fonte: navigator.onLine ? "web" : "offline", dispositivo: "app-iphone", modificato: t.toISOString() };
+  salva(rec);
+  toast(`Entrata in «${luogo}» alle ${hhmm(t)}`, () => salva({ ...rec, eliminato: true, modificato: new Date().toISOString() }));
+}
+function esci() {
+  const o = aperto();
+  if (!o) return;
+  const t = new Date(Math.max(Date.now(), Date.parse(o.entrata)));
+  salva({ ...o, uscita: t.toISOString(), modificato: t.toISOString() });
+  toast(`Uscita registrata alle ${hhmm(t)}`, () => salva({ ...o, modificato: new Date(Date.now() + 1).toISOString() }));
+}
+
+/* ---------- Schermata ---------- */
+function draw() {
+  const o = aperto(), n = Object.keys(coda).length, pill = $("#pill");
+  if (!configurato()) { pill.textContent = "Da collegare"; pill.dataset.c = "err"; }
+  else if (stato === "auth") { pill.textContent = "Token non valido"; pill.dataset.c = "err"; }
+  else if (stato === "server") { pill.textContent = n ? `Portale non pronto · ${n} in coda` : "Portale non pronto"; pill.dataset.c = "err"; }
+  else if (!navigator.onLine || stato === "offline") { pill.textContent = n ? `Offline · ${n} in coda` : "Offline"; pill.dataset.c = "off"; }
+  else if (invio) { pill.textContent = "Invio…"; pill.dataset.c = "sync"; }
+  else if (n) { pill.textContent = `${n} in attesa`; pill.dataset.c = "wait"; }
+  else if (stato === "ok") { pill.textContent = "Inviato"; pill.dataset.c = "ok"; }
+  else { pill.textContent = "…"; pill.dataset.c = "sync"; }
+
+  const f = (setup || !configurato()) ? "setup" : o ? `in:${o.id}` : `out:${luoghi.join("|")}:${(tutte()[0] || {}).luogo || ""}`;
+  if (f === firma) return;
+  firma = f; clearInterval(tick);
+  const el = $("#main");
+  if (f === "setup") {
+    el.innerHTML = `<h1>Collega</h1>
+      <p class="hint">Una volta sola. Il token è la variabile PRESENZE_TOKEN impostata su Netlify.</p>
+      <div><label for="u">Indirizzo del portale</label><input id="u" type="url" inputmode="url" autocapitalize="none" autocorrect="off" placeholder="https://joneshouse.it" value="${esc(base())}">
+      <label for="k">Token</label><input id="k" type="password" autocapitalize="none" autocorrect="off" value="${esc(token())}"></div>
+      <button class="b" type="button" data-salva>Salva</button>`;
+  } else if (o) {
+    const e = Date.parse(o.entrata);
+    el.innerHTML = `<h1>In servizio</h1><div class="where"><span class="live"></span>${esc(o.luogo)}</div>
+      <div class="timer" data-timer>${clock(Date.now() - e)}</div>
+      <button class="b red big" type="button" data-esci>Esci</button>`;
+    tick = setInterval(() => { const t = el.querySelector("[data-timer]"); if (t && !document.hidden) t.textContent = clock(Date.now() - e); }, 1000);
+  } else {
+    const ultimo = (tutte()[0] || {}).luogo;
+    el.innerHTML = `<h1>Timbra</h1>` + luoghi.map(l => `<button class="b${l === ultimo ? " red" : ""}" type="button" data-luogo="${esc(l)}">${esc(l)}${l === ultimo ? "<small>l'ultimo usato</small>" : ""}</button>`).join("");
+    // tenendo premuto il titolo per 2 secondi si riaprono le impostazioni di collegamento
+    let lp = 0; const h = el.querySelector("h1");
+    const stop = () => clearTimeout(lp);
+    h.addEventListener("touchstart", () => { lp = setTimeout(() => { setup = true; draw(); }, 2000); }, { passive: true });
+    ["touchend", "touchmove", "touchcancel"].forEach(ev => h.addEventListener(ev, stop, { passive: true }));
+    h.addEventListener("mousedown", () => { lp = setTimeout(() => { setup = true; draw(); }, 2000); });
+    h.addEventListener("mouseup", stop);
+  }
+}
+
+$("#main").addEventListener("click", e => {
+  const l = e.target.closest("[data-luogo]");
+  if (l) return entra(l.dataset.luogo);
+  if (e.target.closest("[data-esci]")) return esci();
+  if (e.target.closest("[data-salva]")) {
+    cfg = { url: ($("#u").value || "").trim().replace(/\/+$/, ""), token: ($("#k").value || "").trim() };
+    if (cfg.url && !/^https?:\/\//i.test(cfg.url)) cfg.url = "https://" + cfg.url;
+    scrivi(LS_CFG, cfg); setup = false; stato = "?"; draw(); sync();
+  }
+});
+$("#pill").addEventListener("click", () => { if (stato === "auth" || !configurato()) { setup = true; draw(); } else sync(); });
+
+/* Per aprirsi anche senza segnale serve il file sw.js accanto a questa pagina (se c'è, viene usato) */
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./sw.js").catch(() => {});
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+window.addEventListener("online", sync);
+window.addEventListener("offline", () => { stato = "offline"; draw(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { coda = leggi(LS_CODA, coda); registro = leggi(LS_REG, registro); draw(); sync(); } });
+window.addEventListener("pageshow", sync);
+setInterval(() => { if (!document.hidden && Object.keys(coda).length && navigator.onLine) sync(); }, 30000);
+draw(); sync();
+})();
+</script>
+</body>
+</html>
